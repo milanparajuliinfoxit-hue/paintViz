@@ -1,45 +1,51 @@
 # Paint Visualizer — Core MVP
 
-See `docs/REQUIREMENTS.md` and `docs/IMPLEMENTATION.md` for the full spec.
+See docs/REQUIREMENTS.md and docs/IMPLEMENTATION.md for the full spec.
 
 ## Quick start
 
 ### 1. Database
-Create a MySQL 8 database, then set `DATABASE_URL` in `backend/.env` (copy from `.env.example`).
+Create a MySQL 8 database and set DATABASE_URL in backend/.env (copy from .env.example).
+
+Then initialize the schema:
+
+```bash
+mysql -u root -p < database/setup.sql
+```
 
 ### 2. Backend
-```
+```bash
 cd backend
 npm install
-npx prisma generate
-npx prisma migrate dev --name init
+npm run migrate
 npm run dev
 ```
-API runs on http://localhost:4000
+
+API runs on http://localhost:4000.
 
 ### 3. Frontend
-```
+```bash
 cd frontend
 npm install
 npm run dev
 ```
-App runs on http://localhost:5173 (proxies /api and /uploads to the backend)
 
-## What's implemented
-- Color Catalog: full CRUD, search/filter, bulk delete/deactivate, side-drawer form, ERP-style data table
-- Projects: create/rename/delete, card grid dashboard
-- Photo management: drag-and-drop upload, thumbnails, select, delete, bulk delete
-- Visualizer canvas: cursor-anchored zoom, pan, fit-to-screen
-- Surface tracing: click-to-place polygon tool, snap-to-close, layers panel, vertex editing
-- Color application: catalog swatch picker, realistic multiply-blend fill, before/after hold-to-compare
-- Undo/redo: unified command stack across tracing and color actions
-- Saved combos: name and switch between multiple color combinations per project
+The app runs on http://localhost:5173 and Vite proxies /api and /uploads to the backend.
 
-## Known environment limitation
-`npx prisma generate` requires downloading engine binaries from the internet.
-If you're running this in a network-restricted environment, ensure `binaries.prisma.sh`
-(or your configured Prisma engine mirror) is reachable, or configure `PRISMA_QUERY_ENGINE_LIBRARY`
-etc. per Prisma's docs for offline/air-gapped setups.
+## Current implementation
+- Color catalog: CRUD, search/filter, bulk delete/deactivate, drawer form, ERP-style table
+- Projects: create, rename, delete, card dashboard
+- Photo management: upload, thumbnails, selection, delete, bulk delete
+- Visualizer canvas: zoom, pan, fit-to-screen, layer rendering
+- Surface tracing: click-to-place polygon tool, snap-to-close, vertex editing
+- Color application: swatch picker, multiply-style fill, before/after comparison
+- Undo/redo: shared history stack for tracing and color actions
+- Saved combos: create and switch between color combinations per project
+
+## Notes
+- This repository does not use Prisma. The backend uses a custom Node.js + MySQL stack.
+- Schema changes are applied with the lightweight migration runner in backend/src/migrate.js.
+- Uploaded images are served from /uploads and managed through the backend.
 
 ## Not yet built (see docs/IMPLEMENTATION.md "next steps")
 - Drag-to-reorder photo thumbnails (API endpoint already exists: PUT /api/photos/reorder)
