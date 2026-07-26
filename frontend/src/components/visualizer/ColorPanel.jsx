@@ -14,7 +14,12 @@ export default function ColorPanel() {
   const activeSurface = surfaces.find((s) => s.id === activeSurfaceId);
 
   useEffect(() => {
-    colorsApi.list({ is_active: 'true' }).then(setColors).catch(() => {});
+    colorsApi.list({ is_active: 'true' })
+      .then((result) => {
+        const rows = Array.isArray(result) ? result : (result?.data ?? []);
+        setColors(rows);
+      })
+      .catch(() => {});
   }, []);
 
   const filtered = colors.filter((c) =>
