@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+:root {
+  --pv-bg: #f7f7f8;
+  --pv-surface: #ffffff;
+  --pv-border: #e4e4e7;
+  --pv-text: #18181b;
+  --pv-text-muted: #71717a;
+  --pv-accent: #6d28d9;
+  --pv-accent-hover: #5b21b6;
+  --pv-canvas-bg: #1e1e24;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  background: var(--pv-bg);
+  color: var(--pv-text);
+}
+
+/* Thin, modern scrollbars — matches the Figma/Canva-grade feel */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
