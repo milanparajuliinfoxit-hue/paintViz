@@ -2,7 +2,7 @@ const pool = require('../lib/db');
 const { ApiError } = require('../middleware/errorHandler');
 const { importColors } = require('../services/colorImport.service');
 
-const COLOR_COLUMNS = 'id, name, code, hex, brand, finish, product_flags AS productFlags, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt';
+const COLOR_COLUMNS = 'id, name, code, hex, r_value AS rValue, g_value AS gValue, b_value AS bValue, brand, finish, product_flags AS productFlags, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt';
 
 const ALLOWED_LIMITS = new Set([25, 50, 100]);
 const DEFAULT_LIMIT = 25;

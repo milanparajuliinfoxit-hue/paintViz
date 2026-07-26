@@ -127,6 +127,9 @@ async function importColors(fileBuffer, brand) {
       name: colorName,
       code: colorCode,
       hex,
+      rValue: rResult.value,
+      gValue: gResult.value,
+      bValue: bResult.value,
       brand,
       productFlags,
     });
@@ -173,12 +176,15 @@ async function importColors(fileBuffer, brand) {
   const BATCH_SIZE = 500;
   for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
     const batch = toInsert.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => '(?, ?, ?, ?, ?)').join(', ');
-    const sql = `INSERT INTO colors (name, code, hex, brand, product_flags) VALUES ${placeholders}`;
+    const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const sql = `INSERT INTO colors (name, code, hex, r_value, g_value, b_value, brand, product_flags) VALUES ${placeholders}`;
     const values = batch.flatMap((r) => [
       r.name,
       r.code,
       r.hex,
+      r.rValue,
+      r.gValue,
+      r.bValue,
       r.brand,
       JSON.stringify(r.productFlags),
     ]);
