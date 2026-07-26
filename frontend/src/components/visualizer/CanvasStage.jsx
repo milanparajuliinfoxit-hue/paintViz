@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Group } from 'react-konva';
 import useImage from 'use-image';
+import { Lock } from 'lucide-react';
 import useVisualizerStore from '../../store/visualizerStore';
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
-const SNAP_THRESHOLD = 10; // px, in image space
+const SNAP_THRESHOLD = 10;
+const MIN_IMAGE_VISIBILITY = 60;
 
 function flatten(points) {
   return points.flat();
@@ -13,6 +15,45 @@ function flatten(points) {
 
 function distance(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+function clampPosition(pos, imgWidth, imgHeight, stageWidth, stageHeight, currentScale) {
+  if (!imgWidth || !imgHeight || !stageWidth || !stageHeight) return pos;
+
+  const imgW = imgWidth * currentScale;
+  const imgH = imgHeight * currentScale;
+
+  const imgLeft = pos.x;
+  const imgTop = pos.y;
+  const imgRight = pos.x + imgW;
+  const imgBottom = pos.y + imgH;
+
+  let x = pos.x;
+  let y = pos.y;
+
+  if (imgW <= stageWidth) {
+    const centerX = (stageWidth - imgW) / 2;
+    if (imgRight < MIN_IMAGE_VISIBILITY) x = MIN_IMAGE_VISIBILITY - imgW;
+    if (imgLeft > stageWidth - MIN_IMAGE_VISIBILITY) x = stageWidth - MIN_IMAGE_VISIBILITY;
+    if (x > centerX + imgW * 0.3) x = centerX + imgW * 0.3;
+    if (x < centerX - imgW * 0.3) x = centerX - imgW * 0.3;
+  } else {
+    if (imgLeft > -MIN_IMAGE_VISIBILITY) x = -MIN_IMAGE_VISIBILITY;
+    if (imgRight < stageWidth + MIN_IMAGE_VISIBILITY) x = stageWidth + MIN_IMAGE_VISIBILITY - imgW;
+  }
+
+  if (imgH <= stageHeight) {
+    const centerY = (stageHeight - imgH) / 2;
+    if (imgBottom < MIN_IMAGE_VISIBILITY) y = MIN_IMAGE_VISIBILITY - imgH;
+    if (imgTop > stageHeight - MIN_IMAGE_VISIBILITY) y = stageHeight - MIN_IMAGE_VISIBILITY;
+    if (y > centerY + imgH * 0.3) y = centerY + imgH * 0.3;
+    if (y < centerY - imgH * 0.3) y = centerY - imgH * 0.3;
+  } else {
+    if (imgTop > -MIN_IMAGE_VISIBILITY) y = -MIN_IMAGE_VISIBILITY;
+    if (imgBottom < stageHeight + MIN_IMAGE_VISIBILITY) y = stageHeight + MIN_IMAGE_VISIBILITY - imgH;
+  }
+
+  return { x, y };
 }
 
 export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageRef: externalStageRef }) {
@@ -30,8 +71,11 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
   const addSurface = useVisualizerStore((s) => s.addSurface);
   const updateSurfacePolygon = useVisualizerStore((s) => s.updateSurfacePolygon);
   const beforeAfter = useVisualizerStore((s) => s.beforeAfter);
+  const lockedPhotoIds = useVisualizerStore((s) => s.lockedPhotoIds);
 
   const activePhoto = photos.find((p) => p.id === activePhotoId);
+  const isLocked = activePhotoId ? lockedPhotoIds.includes(activePhotoId) : false;
+
   const [image] = useImage(activePhoto?.fileUrl, 'anonymous');
 
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -39,9 +83,8 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [tracePoints, setTracePoints] = useState([]);
   const [mousePos, setMousePos] = useState(null);
-  const [pendingLabel, setPendingLabel] = useState('Wall');
+  const [pendingLabel] = useState('Wall');
 
-  // Fit-to-screen whenever a new image loads
   const fitToScreen = useCallback(() => {
     if (!image || stageSize.width === 0) return;
     const scaleX = stageSize.width / image.width;
@@ -67,7 +110,6 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     return () => observer.disconnect();
   }, []);
 
-  // Cursor-anchored zoom
   const handleWheel = (e) => {
     e.evt.preventDefault();
     const stage = stageRef.current;
@@ -84,11 +126,19 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     let newScale = direction > 0 ? oldScale * factor : oldScale / factor;
     newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
 
-    setScale(newScale);
-    setPosition({
+    const newPos = {
       x: pointer.x - mousePointTo.x * newScale,
       y: pointer.y - mousePointTo.y * newScale,
-    });
+    };
+
+    if (image) {
+      const clamped = clampPosition(newPos, image.width, image.height, stageSize.width, stageSize.height, newScale);
+      setScale(newScale);
+      setPosition(clamped);
+    } else {
+      setScale(newScale);
+      setPosition(newPos);
+    }
     onZoomChange?.(newScale);
   };
 
@@ -97,14 +147,13 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     (pointer.y - position.y) / scale,
   ];
 
-  const handleStageClick = (e) => {
+  const handleStageClick = (_e) => {
     if (tool !== 'trace') return;
     const stage = stageRef.current;
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
     let [ix, iy] = toImageCoords(pointer);
 
-    // Snap to first point to close polygon
     if (tracePoints.length >= 3 && distance([ix, iy], tracePoints[0]) < SNAP_THRESHOLD / scale) {
       finishTrace();
       return;
@@ -144,13 +193,26 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     const newCoords = surface.polygonCoords.map((pt, i) =>
       i === index ? [e.target.x(), e.target.y()] : pt
     );
-    // Optimistic local update happens via store on drag end to avoid excess API calls
     e.target._newCoords = newCoords;
   };
 
   const handleVertexDragEnd = (surface, e) => {
     const newCoords = e.target._newCoords;
     if (newCoords) updateSurfacePolygon(surface.id, newCoords);
+  };
+
+  const handleDragEnd = (e) => {
+    const pos = { x: e.target.x(), y: e.target.y() };
+    if (image) {
+      const clamped = clampPosition(pos, image.width, image.height, stageSize.width, stageSize.height, scale);
+      setPosition(clamped);
+      if (clamped.x !== pos.x || clamped.y !== pos.y) {
+        e.target.position(clamped);
+        e.target.batchDraw();
+      }
+    } else {
+      setPosition(pos);
+    }
   };
 
   return (
@@ -163,17 +225,16 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
         scaleY={scale}
         x={position.x}
         y={position.y}
-        draggable={tool === 'select'}
-        onDragEnd={(e) => setPosition({ x: e.target.x(), y: e.target.y() })}
+        draggable={tool === 'select' && !isLocked}
+        onDragEnd={handleDragEnd}
         onWheel={handleWheel}
         onClick={handleStageClick}
         onMouseMove={handleMouseMove}
-        style={{ cursor: tool === 'trace' ? 'crosshair' : 'default' }}
+        style={{ cursor: tool === 'trace' ? 'crosshair' : (isLocked ? 'not-allowed' : 'default') }}
       >
         <Layer>
           {image && <KonvaImage image={image} />}
 
-          {/* Traced surfaces */}
           {!beforeAfter && surfaces
             .filter((s) => !hiddenIds.includes(s.id))
             .map((surface) => (
@@ -198,7 +259,7 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
                       fill="#ffffff"
                       stroke="#6d28d9"
                       strokeWidth={1.5 / scale}
-                      draggable
+                      draggable={!isLocked}
                       onDragMove={(e) => handleVertexDrag(surface, i, e)}
                       onDragEnd={(e) => handleVertexDragEnd(surface, e)}
                     />
@@ -206,7 +267,6 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
               </Group>
             ))}
 
-          {/* In-progress trace */}
           {tool === 'trace' && tracePoints.length > 0 && (
             <>
               <Line
@@ -234,6 +294,13 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
       {tool === 'trace' && (
         <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/75 px-4 py-1.5 text-xs text-white backdrop-blur">
           Click to place points · click the first point (or Enter) to close · Esc to cancel
+        </div>
+      )}
+
+      {isLocked && (
+        <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-lg bg-black/60 px-2.5 py-1.5 text-[11px] text-white/90 backdrop-blur">
+          <Lock size={12} />
+          Image locked
         </div>
       )}
     </div>

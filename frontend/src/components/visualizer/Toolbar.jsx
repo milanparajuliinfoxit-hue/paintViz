@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, IconButton, Tooltip, Select, MenuItem, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
 import {
   Undo2, Redo2, RotateCcw, Eye, MousePointer2, PenTool, ZoomIn, ZoomOut, Maximize,
-  ArrowLeft, Save, Check,
+  ArrowLeft, Save, Check, Lock, Unlock,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import useVisualizerStore from '../../store/visualizerStore';
@@ -23,10 +23,15 @@ export default function Toolbar({ zoom, onZoomIn, onZoomOut, onFit }) {
   const activeComboId = useVisualizerStore((s) => s.activeComboId);
   const applyCombo = useVisualizerStore((s) => s.applyCombo);
   const saveCombo = useVisualizerStore((s) => s.saveCombo);
+  const activePhotoId = useVisualizerStore((s) => s.activePhotoId);
+  const lockedPhotoIds = useVisualizerStore((s) => s.lockedPhotoIds);
+  const togglePhotoLock = useVisualizerStore((s) => s.togglePhotoLock);
 
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [comboName, setComboName] = useState('');
   const [saved, setSaved] = useState(false);
+
+  const isLocked = activePhotoId ? lockedPhotoIds.includes(activePhotoId) : false;
 
   const handleSaveCombo = async () => {
     if (!comboName.trim()) return;
@@ -82,6 +87,17 @@ export default function Toolbar({ zoom, onZoomIn, onZoomOut, onFit }) {
       </Tooltip>
 
       <Divider orientation="vertical" flexItem className="!my-2.5" />
+
+      <Tooltip title={isLocked ? 'Unlock image' : 'Lock image position'}>
+        <IconButton
+          size="small"
+          onClick={() => activePhotoId && togglePhotoLock(activePhotoId)}
+          disabled={!activePhotoId}
+          className={isLocked ? '!bg-amber-100 !text-amber-600' : ''}
+        >
+          {isLocked ? <Lock size={16} /> : <Unlock size={16} />}
+        </IconButton>
+      </Tooltip>
 
       <Tooltip title="Hold to see original photo">
         <IconButton

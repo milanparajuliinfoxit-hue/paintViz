@@ -19,6 +19,7 @@ const useVisualizerStore = create((set, get) => ({
   history: [],
   future: [],
   loading: false,
+  lockedPhotoIds: [],
 
   async loadProject(projectId) {
     set({ loading: true });
@@ -90,6 +91,21 @@ const useVisualizerStore = create((set, get) => ({
 
   setBeforeAfter(value) {
     set({ beforeAfter: value });
+  },
+
+  togglePhotoLock(photoId) {
+    set((state) => {
+      const locked = state.lockedPhotoIds.includes(photoId);
+      return {
+        lockedPhotoIds: locked
+          ? state.lockedPhotoIds.filter((id) => id !== photoId)
+          : [...state.lockedPhotoIds, photoId],
+      };
+    });
+  },
+
+  isPhotoLocked(photoId) {
+    return get().lockedPhotoIds.includes(photoId);
   },
 
   pushHistory(command) {
