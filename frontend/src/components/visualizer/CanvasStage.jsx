@@ -3,6 +3,7 @@ import { Stage, Layer, Image as KonvaImage, Line, Circle, Group } from 'react-ko
 import useImage from 'use-image';
 import { Lock } from 'lucide-react';
 import useVisualizerStore from '../../store/visualizerStore';
+import { segmentPoint, refineMask } from '../../api/removals';
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
@@ -72,9 +73,15 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
   const updateSurfacePolygon = useVisualizerStore((s) => s.updateSurfacePolygon);
   const beforeAfter = useVisualizerStore((s) => s.beforeAfter);
   const lockedPhotoIds = useVisualizerStore((s) => s.lockedPhotoIds);
+  const cleanupMask = useVisualizerStore((s) => s.cleanupMask);
+  const cleanupPoints = useVisualizerStore((s) => s.cleanupPoints);
+  const setCleanupMask = useVisualizerStore((s) => s.setCleanupMask);
+  const addCleanupPoint = useVisualizerStore((s) => s.addCleanupPoint);
+  const clearCleanupSelection = useVisualizerStore((s) => s.clearCleanupSelection);
 
   const activePhoto = photos.find((p) => p.id === activePhotoId);
   const isLocked = activePhotoId ? lockedPhotoIds.includes(activePhotoId) : false;
+  const isCleanupMode = tool === 'cleanup';
 
   const [image] = useImage(activePhoto?.fileUrl, 'anonymous');
 
@@ -84,6 +91,16 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
   const [tracePoints, setTracePoints] = useState([]);
   const [mousePos, setMousePos] = useState(null);
   const [pendingLabel] = useState('Wall');
+  const [segmenting, setSegmenting] = useState(false);
+
+  // Brush refinement state
+  const [refining, setRefining] = useState(false);
+  const brushSize = 20;
+  const [brushCursor, setBrushCursor] = useState(null);
+  const isPaintingRef = useRef(false);
+  const brushCanvasRef = useRef(null);
+  const [brushLayerImage, setBrushLayerImage] = useState(null);
+  const brushDebounceRef = useRef(null);
 
   const fitToScreen = useCallback(() => {
     if (!image || stageSize.width === 0) return;
@@ -109,6 +126,16 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // Initialize brush canvas when image loads
+  useEffect(() => {
+    if (image && activePhotoId) {
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      brushCanvasRef.current = canvas;
+    }
+  }, [image, activePhotoId]);
 
   const handleWheel = (e) => {
     e.evt.preventDefault();
@@ -142,12 +169,37 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     onZoomChange?.(newScale);
   };
 
-  const toImageCoords = (pointer) => [
+  const toImageCoordsRef = useRef(null);
+  toImageCoordsRef.current = (pointer) => [
     (pointer.x - position.x) / scale,
     (pointer.y - position.y) / scale,
   ];
+  const toImageCoords = (pointer) => toImageCoordsRef.current(pointer);
 
-  const handleStageClick = (_e) => {
+  const handleStageClick = useCallback(async (_e) => {
+    if (isCleanupMode && !refining && image && activePhotoId) {
+      const stage = stageRef.current;
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
+      const [ix, iy] = toImageCoords(pointer);
+
+      if (ix < 0 || iy < 0 || ix > image.width || iy > image.height) return;
+
+      setSegmenting(true);
+      try {
+        const maskDataUrl = await segmentPoint(activePhotoId, ix, iy);
+        if (maskDataUrl) {
+          setCleanupMask(maskDataUrl);
+          addCleanupPoint({ x: ix, y: iy });
+        }
+      } catch (err) {
+        console.error('Segmentation failed:', err);
+      } finally {
+        setSegmenting(false);
+      }
+      return;
+    }
+
     if (tool !== 'trace') return;
     const stage = stageRef.current;
     const pointer = stage.getPointerPosition();
@@ -159,14 +211,65 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
       return;
     }
     setTracePoints((pts) => [...pts, [ix, iy]]);
-  };
+  }, [isCleanupMode, refining, image, activePhotoId, tool, tracePoints, scale]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleMouseMove = () => {
-    if (tool !== 'trace' || !stageRef.current) return;
+  const handleBrushStroke = useCallback(async (ix, iy) => {
+    if (!brushCanvasRef.current || !cleanupMask || !activePhotoId) return;
+
+    const canvas = brushCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+
+    // Draw the brush stroke on the offscreen canvas
+    ctx.fillStyle = 'white';
+    ctx.beginPath();
+    ctx.arc(ix, iy, brushSize / 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Update the Konva image
+    setBrushLayerImage(canvas.toDataURL());
+
+    // Debounce the backend call
+    if (brushDebounceRef.current) clearTimeout(brushDebounceRef.current);
+    brushDebounceRef.current = setTimeout(async () => {
+      try {
+        const updatedMask = await refineMask(activePhotoId, canvas.toDataURL());
+        if (updatedMask) {
+          setCleanupMask(updatedMask);
+        }
+      } catch (err) {
+        console.error('Mask refinement failed:', err);
+      }
+    }, 300);
+  }, [cleanupMask, activePhotoId, brushSize, setCleanupMask]);
+
+  const handleMouseMove = useCallback(() => {
+    if (!stageRef.current) return;
     const pointer = stageRef.current.getPointerPosition();
     if (!pointer) return;
-    setMousePos(toImageCoords(pointer));
-  };
+
+    if (tool === 'trace') {
+      setMousePos(toImageCoords(pointer));
+    }
+
+    if (isCleanupMode && refining) {
+      const [ix, iy] = toImageCoords(pointer);
+      setBrushCursor({ x: ix, y: iy });
+
+      if (isPaintingRef.current) {
+        handleBrushStroke(ix, iy);
+      }
+    }
+  }, [tool, isCleanupMode, refining, handleBrushStroke]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleMouseDown = useCallback(() => {
+    if (isCleanupMode && refining) {
+      isPaintingRef.current = true;
+    }
+  }, [isCleanupMode, refining]);
+
+  const handleMouseUp = useCallback(() => {
+    isPaintingRef.current = false;
+  }, []);
 
   const finishTrace = async () => {
     if (tracePoints.length < 3 || !activePhotoId) {
@@ -182,7 +285,13 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
 
   useEffect(() => {
     const handleKey = (e) => {
-      if (e.key === 'Escape') cancelTrace();
+      if (e.key === 'Escape') {
+        cancelTrace();
+        if (isCleanupMode) {
+          clearCleanupSelection();
+          setRefining(false);
+        }
+      }
       if ((e.key === 'Enter') && tool === 'trace') finishTrace();
     };
     window.addEventListener('keydown', handleKey);
@@ -215,6 +324,16 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
     }
   };
 
+  const maskImageRef = useRef(null);
+  const [maskImage] = useImage(cleanupMask, 'anonymous');
+  maskImageRef.current = maskImage;
+
+  const [brushLayerImg] = useImage(brushLayerImage, 'anonymous');
+
+  const cursorStyle = isCleanupMode
+    ? (refining ? 'none' : 'crosshair')
+    : (tool === 'trace' ? 'crosshair' : (isLocked ? 'not-allowed' : 'default'));
+
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-[var(--pv-canvas-bg)]">
       <Stage
@@ -229,11 +348,25 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
         onDragEnd={handleDragEnd}
         onWheel={handleWheel}
         onClick={handleStageClick}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
         onMouseMove={handleMouseMove}
-        style={{ cursor: tool === 'trace' ? 'crosshair' : (isLocked ? 'not-allowed' : 'default') }}
+        onMouseLeave={() => {
+          setBrushCursor(null);
+          isPaintingRef.current = false;
+        }}
+        style={{ cursor: cursorStyle }}
       >
         <Layer>
           {image && <KonvaImage image={image} />}
+
+          {!beforeAfter && isCleanupMode && maskImage && (
+            <KonvaImage image={maskImage} opacity={0.45} listening={false} />
+          )}
+
+          {!beforeAfter && isCleanupMode && brushLayerImg && (
+            <KonvaImage image={brushLayerImg} opacity={0.6} listening={false} />
+          )}
 
           {!beforeAfter && surfaces
             .filter((s) => !hiddenIds.includes(s.id))
@@ -247,7 +380,11 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
                   globalCompositeOperation={surface.color ? 'multiply' : 'source-over'}
                   stroke={surface.id === activeSurfaceId ? '#6d28d9' : 'rgba(255,255,255,0.5)'}
                   strokeWidth={(surface.id === activeSurfaceId ? 2.5 : 1) / scale}
-                  onClick={(e) => { e.cancelBubble = true; selectSurface(surface.id); }}
+                  onClick={(e) => {
+                    if (isCleanupMode) return;
+                    e.cancelBubble = true;
+                    selectSurface(surface.id);
+                  }}
                 />
                 {surface.id === activeSurfaceId && tool === 'select' &&
                   surface.polygonCoords.map((pt, i) => (
@@ -288,12 +425,49 @@ export default function CanvasStage({ hiddenIds, onZoomChange, fitSignal, stageR
               ))}
             </>
           )}
+
+          {isCleanupMode && cleanupPoints.map((pt, i) => (
+            <Circle
+              key={i}
+              x={pt.x}
+              y={pt.y}
+              radius={5 / scale}
+              fill="#ef4444"
+              stroke="#ffffff"
+              strokeWidth={1.5 / scale}
+              listening={false}
+            />
+          ))}
+
+          {isCleanupMode && refining && brushCursor && (
+            <Circle
+              x={brushCursor.x}
+              y={brushCursor.y}
+              radius={brushSize / 2}
+              stroke="white"
+              strokeWidth={1.5 / scale}
+              fill="rgba(255,255,255,0.08)"
+              listening={false}
+            />
+          )}
         </Layer>
       </Stage>
 
       {tool === 'trace' && (
         <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/75 px-4 py-1.5 text-xs text-white backdrop-blur">
           Click to place points · click the first point (or Enter) to close · Esc to cancel
+        </div>
+      )}
+
+      {isCleanupMode && (
+        <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/75 px-4 py-1.5 text-xs text-white backdrop-blur">
+          {segmenting
+            ? 'Detecting object...'
+            : refining
+              ? 'Paint to refine the selection · click "Refine selection" to exit'
+              : !cleanupMask
+                ? 'Click on an object to select it for removal'
+                : 'Object selected — click "Remove" to proceed'}
         </div>
       )}
 

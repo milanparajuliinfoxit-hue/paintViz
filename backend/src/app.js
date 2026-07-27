@@ -11,6 +11,7 @@ const projectsRoutes = require('./routes/projects.routes');
 const photosRoutes = require('./routes/photos.routes');
 const surfacesRoutes = require('./routes/surfaces.routes');
 const visualizationsRoutes = require('./routes/visualizations.routes');
+const removalsRoutes = require('./routes/removals.routes');
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use('/api/projects', projectsRoutes);
 app.use('/api/photos', photosRoutes);
 app.use('/api/surfaces', surfacesRoutes);
 app.use('/api/visualizations', visualizationsRoutes);
+app.use('/api/removal-jobs', removalsRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

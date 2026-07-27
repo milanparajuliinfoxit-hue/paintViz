@@ -4,7 +4,7 @@ const path = require('path');
 const { ApiError } = require('../middleware/errorHandler');
 const { UPLOAD_DIR } = require('../middleware/upload');
 
-const PHOTO_COLUMNS = 'id, project_id AS projectId, file_url AS fileUrl, sort_order AS sortOrder, uploaded_at AS uploadedAt';
+const PHOTO_COLUMNS = 'id, project_id AS projectId, file_url AS fileUrl, sort_order AS sortOrder, uploaded_at AS uploadedAt, source_photo_id AS sourcePhotoId, is_cleaned_variant AS isCleanedVariant';
 
 // POST /api/projects/:id/photos  (multipart, field "photos")
 async function upload(req, res, next) {

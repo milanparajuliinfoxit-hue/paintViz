@@ -28,7 +28,7 @@ async function getOne(req, res, next) {
     const project = projects[0];
 
     const [photos] = await pool.execute(
-      'SELECT id, project_id AS projectId, file_url AS fileUrl, sort_order AS sortOrder, uploaded_at AS uploadedAt FROM photos WHERE project_id = ? ORDER BY sort_order ASC',
+      'SELECT id, project_id AS projectId, file_url AS fileUrl, sort_order AS sortOrder, uploaded_at AS uploadedAt, source_photo_id AS sourcePhotoId, is_cleaned_variant AS isCleanedVariant FROM photos WHERE project_id = ? ORDER BY sort_order ASC',
       [id],
     );
 

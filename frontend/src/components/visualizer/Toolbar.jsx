@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Button, IconButton, Tooltip, Select, MenuItem, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField } from '@mui/material';
+import { Button, IconButton, Tooltip, Select, MenuItem, Divider, Dialog, DialogTitle, DialogContent, DialogActions, TextField, CircularProgress } from '@mui/material';
 import {
   Undo2, Redo2, RotateCcw, Eye, MousePointer2, PenTool, ZoomIn, ZoomOut, Maximize,
-  ArrowLeft, Save, Check, Lock, Unlock,
+  ArrowLeft, Save, Check, Lock, Unlock, Eraser, Loader2, Paintbrush, Plus,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import useVisualizerStore from '../../store/visualizerStore';
+import { createRemovalJob } from '../../api/removals';
 
 export default function Toolbar({ zoom, onZoomIn, onZoomOut, onFit }) {
   const navigate = useNavigate();
@@ -26,12 +27,23 @@ export default function Toolbar({ zoom, onZoomIn, onZoomOut, onFit }) {
   const activePhotoId = useVisualizerStore((s) => s.activePhotoId);
   const lockedPhotoIds = useVisualizerStore((s) => s.lockedPhotoIds);
   const togglePhotoLock = useVisualizerStore((s) => s.togglePhotoLock);
+  const cleanupMask = useVisualizerStore((s) => s.cleanupMask);
+  const activeRemovalJobId = useVisualizerStore((s) => s.activeRemovalJobId);
+  const removalJobStatus = useVisualizerStore((s) => s.removalJobStatus);
+  const setActiveRemovalJob = useVisualizerStore((s) => s.setActiveRemovalJob);
+  const clearCleanupSelection = useVisualizerStore((s) => s.clearCleanupSelection);
 
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [comboName, setComboName] = useState('');
   const [saved, setSaved] = useState(false);
+  const [submittingRemoval, setSubmittingRemoval] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [brushSize, setBrushSize] = useState(20);
 
   const isLocked = activePhotoId ? lockedPhotoIds.includes(activePhotoId) : false;
+  const isCleanupMode = tool === 'cleanup';
+  const canRemove = isCleanupMode && cleanupMask && !activeRemovalJobId && !submittingRemoval;
+  const isJobActive = activeRemovalJobId && (removalJobStatus === 'pending' || removalJobStatus === 'processing');
 
   const handleSaveCombo = async () => {
     if (!comboName.trim()) return;
@@ -40,6 +52,25 @@ export default function Toolbar({ zoom, onZoomIn, onZoomOut, onFit }) {
     setComboName('');
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
+  };
+
+  const handleRemove = async () => {
+    if (!canRemove || !activePhotoId) return;
+    setSubmittingRemoval(true);
+    try {
+      const { jobId } = await createRemovalJob(activePhotoId, cleanupMask);
+      setActiveRemovalJob(jobId);
+    } catch (err) {
+      const message = err.message || 'Failed to submit removal job';
+      console.error('Failed to submit removal job', {
+        photoId: activePhotoId,
+        status: err.code,
+        message,
+      });
+      alert(message);
+    } finally {
+      setSubmittingRemoval(false);
+    }
   };
 
   return (
@@ -63,6 +94,84 @@ export default function Toolbar({ zoom, onZoomIn, onZoomOut, onFit }) {
           <PenTool size={16} />
         </IconButton>
       </Tooltip>
+      <Tooltip title="Remove objects">
+        <IconButton size="small" onClick={() => setTool('cleanup')} className={isCleanupMode ? '!bg-[var(--pv-accent)]/10 !text-[var(--pv-accent)]' : ''}>
+          <Eraser size={16} />
+        </IconButton>
+      </Tooltip>
+
+      {isCleanupMode && (
+        <>
+          <Divider orientation="vertical" flexItem className="!my-2.5" />
+
+          {isJobActive ? (
+            <div className="flex items-center gap-1.5 text-xs text-[var(--pv-text-muted)]">
+              <Loader2 size={14} className="animate-spin" />
+              <span>Processing...</span>
+            </div>
+          ) : (
+            <>
+              <Button
+                size="small"
+                variant="contained"
+                disabled={!canRemove}
+                onClick={handleRemove}
+                startIcon={submittingRemoval ? <CircularProgress size={12} color="inherit" /> : <Eraser size={14} />}
+                className="!text-xs"
+              >
+                {submittingRemoval ? 'Submitting...' : 'Remove'}
+              </Button>
+
+              {cleanupMask && (
+                <>
+                  <Tooltip title="Add another object to selection">
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        // Clear mask but keep points — next click will add to existing selection
+                        useVisualizerStore.setState({ cleanupMask: null });
+                      }}
+                      className="!text-[var(--pv-text-muted)]"
+                    >
+                      <Plus size={14} />
+                    </IconButton>
+                  </Tooltip>
+
+                  <Tooltip title={refining ? 'Exit refine mode' : 'Refine selection (brush)'}>
+                    <IconButton
+                      size="small"
+                      onClick={() => setRefining(!refining)}
+                      className={refining ? '!bg-[var(--pv-accent)]/10 !text-[var(--pv-accent)]' : '!text-[var(--pv-text-muted)]'}
+                    >
+                      <Paintbrush size={14} />
+                    </IconButton>
+                  </Tooltip>
+
+                  {refining && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-[var(--pv-text-muted)]">{brushSize}px</span>
+                      <input
+                        type="range"
+                        min={5}
+                        max={100}
+                        value={brushSize}
+                        onChange={(e) => setBrushSize(Number(e.target.value))}
+                        className="w-20 accent-[var(--pv-accent)]"
+                      />
+                    </div>
+                  )}
+
+                  <Tooltip title="Clear selection">
+                    <IconButton size="small" onClick={() => { clearCleanupSelection(); setRefining(false); }}>
+                      <RotateCcw size={14} />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
 
       <Divider orientation="vertical" flexItem className="!my-2.5" />
 

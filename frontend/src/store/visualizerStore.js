@@ -1,25 +1,26 @@
 import { create } from 'zustand';
 import { projectsApi } from '../api/projects';
 
-// Command-pattern undo/redo: every mutating action pushes {type, payload, inverse}
-// onto history. Undo pops history, applies inverse, pushes onto future.
-// This single stack covers both tracing edits and color-assignment edits (FR-6.8).
-
 const useVisualizerStore = create((set, get) => ({
   project: null,
   photos: [],
   activePhotoId: null,
-  surfaces: [], // surfaces for the active photo only
+  surfaces: [],
   activeSurfaceId: null,
   combos: [],
   activeComboId: null,
-  tool: 'select', // 'select' | 'trace'
+  tool: 'select', // 'select' | 'trace' | 'cleanup'
   beforeAfter: false,
-  saveStatus: 'idle', // 'idle' | 'saving' | 'saved'
+  saveStatus: 'idle',
   history: [],
   future: [],
   loading: false,
   lockedPhotoIds: [],
+  cleanupMask: null, // mask data URL for the current cleanup selection
+  cleanupPoints: [], // array of {x, y} click points sent to the backend
+  activeRemovalJobId: null,
+  removalJobStatus: null, // 'pending' | 'processing' | 'done' | 'failed' | null
+  removalJobError: null,
 
   async loadProject(projectId) {
     set({ loading: true });
@@ -110,6 +111,55 @@ const useVisualizerStore = create((set, get) => ({
 
   pushHistory(command) {
     set((state) => ({ history: [...state.history, command], future: [] }));
+  },
+
+  // --- Cleanup mode actions ---
+
+  setCleanupMask(maskDataUrl) {
+    set({ cleanupMask: maskDataUrl });
+  },
+
+  clearCleanupSelection() {
+    set({ cleanupMask: null, cleanupPoints: [] });
+  },
+
+  addCleanupPoint(point) {
+    set((state) => ({
+      cleanupPoints: [...state.cleanupPoints, point],
+    }));
+  },
+
+  removeLastCleanupPoint() {
+    set((state) => ({
+      cleanupPoints: state.cleanupPoints.slice(0, -1),
+    }));
+  },
+
+  setActiveRemovalJob(jobId) {
+    set({ activeRemovalJobId: jobId, removalJobStatus: 'pending', removalJobError: null });
+  },
+
+  updateRemovalJobStatus(status, resultPhoto, errorMessage) {
+    const update = { removalJobStatus: status };
+    if (errorMessage) update.removalJobError = errorMessage;
+    set(update);
+
+    if (status === 'done' && resultPhoto) {
+      set((state) => ({
+        photos: [...state.photos, { ...resultPhoto, surfaces: [] }],
+        activePhotoId: resultPhoto.id,
+        activeRemovalJobId: null,
+        removalJobStatus: null,
+        cleanupMask: null,
+        cleanupPoints: [],
+      }));
+    } else if (status === 'failed') {
+      set({ activeRemovalJobId: null });
+    }
+  },
+
+  clearRemovalJob() {
+    set({ activeRemovalJobId: null, removalJobStatus: null, removalJobError: null });
   },
 
   // --- Surface actions (each is undo-able) ---
@@ -241,7 +291,6 @@ const useVisualizerStore = create((set, get) => ({
     if (!combo) return;
     const map = combo.surfaceColorMap || {};
     set({ activeComboId: comboId });
-    // Apply without pushing individual undo entries (combo switch is its own action)
     const { surfaces } = get();
     const updates = await Promise.all(
       surfaces.map((s) => projectsApi.updateSurface(s.id, { color_id: map[s.id] ?? null }))

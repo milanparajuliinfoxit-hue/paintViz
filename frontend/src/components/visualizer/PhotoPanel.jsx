@@ -1,7 +1,8 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { IconButton, Checkbox, Typography, LinearProgress, Tooltip } from '@mui/material';
-import { Upload, X, ImagePlus, AlertCircle, Trash2 } from 'lucide-react';
+import { Upload, X, ImagePlus, AlertCircle, Trash2, Eraser, Loader2 } from 'lucide-react';
 import useVisualizerStore from '../../store/visualizerStore';
+import { removalsApi } from '../../api/removals';
 
 const MAX_FILE_SIZE_MB = 15;
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -28,6 +29,9 @@ export default function PhotoPanel() {
   const addPhotos = useVisualizerStore((s) => s.addPhotos);
   const deletePhoto = useVisualizerStore((s) => s.deletePhoto);
   const bulkDeletePhotos = useVisualizerStore((s) => s.bulkDeletePhotos);
+  const setTool = useVisualizerStore((s) => s.setTool);
+  const activeRemovalJobId = useVisualizerStore((s) => s.activeRemovalJobId);
+  const updateRemovalJobStatus = useVisualizerStore((s) => s.updateRemovalJobStatus);
 
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -36,6 +40,7 @@ export default function PhotoPanel() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const [errors, setErrors] = useState([]);
+  const [photoJobStates, setPhotoJobStates] = useState({}); // { [photoId]: 'pending' | 'processing' | 'done' | 'failed' }
 
   const handleFiles = useCallback(async (fileList) => {
     if (!fileList || fileList.length === 0) return;
@@ -98,7 +103,68 @@ export default function PhotoPanel() {
     }
   }, [deletePhoto]);
 
+  const handleCleanupClick = useCallback((e, photoId) => {
+    e.stopPropagation();
+    setActivePhoto(photoId);
+    setTool('cleanup');
+  }, [setActivePhoto, setTool]);
+
   const clearErrors = useCallback(() => setErrors([]), []);
+
+  const handleRetryJob = useCallback(async (e, photoId) => {
+    e.stopPropagation();
+    try {
+      const jobs = await removalsApi.listJobsForPhoto(photoId, 'failed');
+      const failedJob = Array.isArray(jobs) ? jobs[0] : jobs?.data?.[0];
+      if (failedJob) {
+        await removalsApi.retryJob(failedJob.id);
+        setPhotoJobStates((prev) => ({ ...prev, [photoId]: 'pending' }));
+      }
+    } catch (err) {
+      console.error('Retry failed:', err);
+    }
+  }, []);
+
+  // Poll active removal job
+  useEffect(() => {
+    if (!activeRemovalJobId || !activePhotoId) return;
+
+    let cancelled = false;
+    let intervalId;
+
+    const poll = async () => {
+      try {
+        const job = await removalsApi.getJob(activeRemovalJobId);
+        if (cancelled) return;
+
+        const status = job?.status || job?.data?.status;
+        const resultPhoto = job?.resultPhoto || job?.data?.resultPhoto;
+        const errorMessage = job?.errorMessage || job?.data?.errorMessage;
+
+        if (status === 'done') {
+          setPhotoJobStates((prev) => ({ ...prev, [activePhotoId]: 'done' }));
+          updateRemovalJobStatus('done', resultPhoto);
+          clearInterval(intervalId);
+        } else if (status === 'failed') {
+          setPhotoJobStates((prev) => ({ ...prev, [activePhotoId]: 'failed' }));
+          updateRemovalJobStatus('failed', null, errorMessage);
+          clearInterval(intervalId);
+        } else {
+          setPhotoJobStates((prev) => ({ ...prev, [activePhotoId]: status }));
+        }
+      } catch (err) {
+        console.error('Job polling error:', err);
+      }
+    };
+
+    poll();
+    intervalId = setInterval(poll, 2500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [activeRemovalJobId, activePhotoId, updateRemovalJobStatus]);
 
   return (
     <div className="flex h-full w-64 shrink-0 flex-col border-r border-[var(--pv-border)] bg-[var(--pv-surface)]">
@@ -233,6 +299,10 @@ export default function PhotoPanel() {
         <div className="flex flex-col gap-2">
           {photos.map((photo, index) => {
             const isActive = activePhotoId === photo.id;
+            const jobState = photo.isCleanedVariant ? 'done' : photoJobStates[photo.id];
+            const hasActiveJob = jobState === 'pending' || jobState === 'processing';
+            const hasFailedJob = jobState === 'failed';
+
             return (
               <div
                 key={photo.id}
@@ -256,7 +326,25 @@ export default function PhotoPanel() {
                     Photo {index + 1}
                   </span>
                 </div>
-                {isActive && !selectMode && (
+
+                {photo.isCleanedVariant && (
+                  <div className="absolute left-1.5 top-1.5">
+                    <span className="inline-flex items-center rounded-full bg-emerald-500/90 px-1.5 py-0.5 text-[9px] font-semibold text-white backdrop-blur-sm">
+                      Cleaned
+                    </span>
+                  </div>
+                )}
+
+                {hasActiveJob && (
+                  <div className="absolute left-1.5 top-1.5">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/90 px-1.5 py-0.5 text-[9px] font-semibold text-white backdrop-blur-sm">
+                      <Loader2 size={9} className="animate-spin" />
+                      {jobState === 'pending' ? 'Queued' : 'Removing...'}
+                    </span>
+                  </div>
+                )}
+
+                {isActive && !selectMode && !photo.isCleanedVariant && !hasActiveJob && (
                   <div className="absolute left-1.5 top-1.5">
                     <div className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--pv-accent)] text-white shadow-sm">
                       <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
@@ -265,6 +353,7 @@ export default function PhotoPanel() {
                     </div>
                   </div>
                 )}
+
                 {selectMode && (
                   <div className="absolute left-1.5 top-1.5">
                     <Checkbox
@@ -274,16 +363,42 @@ export default function PhotoPanel() {
                     />
                   </div>
                 )}
-                {!selectMode && (
-                  <Tooltip title="Remove photo">
-                    <IconButton
-                      size="small"
-                      className="!absolute !right-1.5 !top-1.5 !bg-black/50 !p-0.5 opacity-0 backdrop-blur-sm transition-opacity hover:!bg-red-500/90 hover:!text-white group-hover:opacity-100"
-                      onClick={(e) => handleDelete(e, photo.id)}
-                    >
-                      <X size={12} />
-                    </IconButton>
-                  </Tooltip>
+
+                {!selectMode && !hasActiveJob && (
+                  <div className="absolute right-1.5 top-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Tooltip title="Remove objects">
+                      <IconButton
+                        size="small"
+                        className="!bg-black/50 !p-0.5 backdrop-blur-sm hover:!bg-[var(--pv-accent)]/90 hover:!text-white"
+                        onClick={(e) => handleCleanupClick(e, photo.id)}
+                      >
+                        <Eraser size={12} />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Remove photo">
+                      <IconButton
+                        size="small"
+                        className="!bg-black/50 !p-0.5 backdrop-blur-sm hover:!bg-red-500/90 hover:!text-white"
+                        onClick={(e) => handleDelete(e, photo.id)}
+                      >
+                        <X size={12} />
+                      </IconButton>
+                    </Tooltip>
+                  </div>
+                )}
+
+                {hasFailedJob && (
+                  <div className="absolute right-1.5 top-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Tooltip title="Couldn't remove — try again">
+                      <IconButton
+                        size="small"
+                        className="!bg-red-500/90 !p-0.5 backdrop-blur-sm !text-white hover:!bg-red-600"
+                        onClick={(e) => handleRetryJob(e, photo.id)}
+                      >
+                        <AlertCircle size={12} />
+                      </IconButton>
+                    </Tooltip>
+                  </div>
                 )}
               </div>
             );
